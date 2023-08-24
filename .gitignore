@@ -1,5 +1,7 @@
 venv/
-images/
 __pycache__/
 data/
+label-studio-data/
 *.json
+*.jpg
+*.png

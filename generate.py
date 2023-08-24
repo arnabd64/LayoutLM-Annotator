@@ -4,18 +4,23 @@ import json
 import numpy as np
 from paddleocr import PaddleOCR
 from uuid import uuid4
-from tqdm import tqdm
 
 
 OCR_ENGINE = PaddleOCR(lang = "en", show_log = False)
+HOST = "localhost"
+PORT = 9000
 
 
 def get_region_id():
     """
-    Returns the Last 12 characters of a randomly
-    generated UUID
+    Generates a UUID to be used as a Region ID.
+    
+    Returns:
+    --------
+        - `str`: 36 characters UUID
     """
-    return str(uuid4())[-12:]
+    return str(uuid4()).replace("-", "")
+
 
 def _total_files(parent_directory: str):
     """
@@ -38,26 +43,44 @@ def _total_files(parent_directory: str):
     
 def get_directory_tree(parent_directory: str):
     """
-    Gets the paths of all children files contained in
-    a directory
+    Gets the Generator object that returns paths of
+    all children files contained in a directory.
+    
+    Args:
+    -----
+        - `parent_directory`: Path to Images Directory
+        
+    Returns:
+    --------
+        - `str`: Generator that returns the file paths
+        of the images.
     """
-    for root, _, files in os.walk(parent_directory):
-        for file in files:
-           file_path = os.path.join(root, file)
-           yield  file_path
+    return (os.path.join(root, file) for root, _, files in os.walk(parent_directory) for file in files)
            
            
 def get_file_URL(filepath: str):
     """
     Converts the physical file path into a URL
+    
+    Args:
+    -----
+        - `filepath`: filepath of the image
+        
+    Returns:
+    --------
+        - `str`: URL for the file
     """
-    return f"http://localhost:9000/{filepath}".replace("\\", "/")
+    return f"http://{HOST}:{PORT}/{filepath}".replace("\\", "/")
   
   
-def read_image(filepath: str):
+def read_image(filepath: str) -> np.ndarray:
     """
     Reads the image using OpenCV and returns the 
     image along with the dimensions
+    
+    Args:
+    -----
+        - `filepath`: filepath to the image.
     
     Returns:
     --------
@@ -69,23 +92,42 @@ def read_image(filepath: str):
 def OCR_Parser(image: np.ndarray):
     """
     Gets the Text and Bounding Box data for input image
-    using Paddle OCR.
+    using Paddle OCR. A `Generator` object is used so conserve
+    system memory instead of returnin the entire list.
+    
+    Args:
+    -----
+        - `image`: OpenCV image to be parsed by OCR Engine
+        
+    Returns:
+    --------
+        - `Generator` containing the following unpackable items:
+            - `region_id`: (str) Unique ID of the bounding box
+            - `bottom_left`: (list) Co-Ordinates of Bottom Left corner of Bounding Box
+            - `upper_right`: (list) Co-Ordinated of Upper Right corner of Bounding Box
+            - `text`: (str) Text Extracted
+            
+    Examples:
+    ---------
+    
+    ```python
+    >>> image = read_image(path_to_image)
+    >>> for reg_id, bl, ur, text in OCR_Parser(image):
+    ...     print(reg_id, bl, ur, text)
+        
+    ```
     """
-    results = OCR_ENGINE.ocr(image, cls = False)
+    results = OCR_ENGINE.ocr(image, cls = False)[0]
     
     # loop over each region
-    for item in results[0]:
-        region_id = get_region_id()
-        ll, _, up, _ = item[0]
-        text, _ = item[1]
-        # if no text is found then skip
-        if not text:
+    for item in results:
+        if not item[1][0]:
             continue
         
-        yield region_id, ll, up, text
+        yield get_region_id(), item[0][0], item[0][2], item[1][0]
 
 
-def convert_bounding_box_format(lower_left: list, upper_right: list):
+def convert_bounding_box_format(bottom_left: list, upper_right: list):
     """
     Converts the Bounding Box of `[x_min, y_min, x_max, y_max]` to `[x, y, w, h]`
     
@@ -96,10 +138,10 @@ def convert_bounding_box_format(lower_left: list, upper_right: list):
         
     Returns:
     --------
-        - `list` conatining `[x, y, width, height]`
+        - `list`: containing `[x, y, width, height]`
     """       
     # unpack co-ordinates
-    x_min, y_min = lower_left
+    x_min, y_min = bottom_left
     x_max, y_max = upper_right
 
     # get the height and width
@@ -109,7 +151,7 @@ def convert_bounding_box_format(lower_left: list, upper_right: list):
     return [x_min, y_min, width, heigth]
 
 
-def get_bbox_percent(bbox: list, image_dim: tuple):
+def normalize_bbox(bbox: list, image_dim: tuple):
     """
     Converts bounding boxes from whole values to
     percent values
@@ -118,6 +160,10 @@ def get_bbox_percent(bbox: list, image_dim: tuple):
     -----
         - `bbox`: List of Bounding Box Co-Ordinates
         - `image_dim`: Dimensions of the image
+        
+    Returns:
+    --------
+        - `list`: Normalized Bounding Boxes
     """
     # unpack the values
     image_width, image_height = image_dim
@@ -137,19 +183,15 @@ def export_label_studio_task(image_directory: str, output_filepath: str, include
     label_studio_tasks = list()
     _file_count = _total_files(image_directory)
     
-    count = 0
-    
-    for image_path in tqdm(get_directory_tree(image_directory), desc = "Processing", ascii = True, total = _file_count):
-        count += 1
-        if count == 2:
-            break
+    for image_path in get_directory_tree(image_directory):
         # check if the file is an image
-        if not image_path.lower().endswith((".jpg", ".jpeg")):
+        if not image_path.lower().endswith((".jpg", ".jpeg", ".png")):
             continue
         
         # read the image
         image = read_image(image_path)
         
+        # get image dimensions
         image_width, image_height, _ = np.shape(image)
         
         # containers to store results
@@ -157,11 +199,11 @@ def export_label_studio_task(image_directory: str, output_filepath: str, include
         output_json = dict()
         
         # parse image through OCR engine
-        for region_id, lower_left, upper_right, text in OCR_Parser(image):
+        for region_id, bottom_left, upper_right, text in OCR_Parser(image):
             
             # get bounding box co-ordinates
-            xywh_bbox = convert_bounding_box_format(lower_left, upper_right)
-            x, y, w, h = get_bbox_percent(xywh_bbox, (image_width, image_height))
+            xywh_bbox = convert_bounding_box_format(bottom_left, upper_right)
+            x, y, w, h = normalize_bbox(xywh_bbox, (image_width, image_height))
             
             # different results
             if include_bbox:
@@ -216,5 +258,3 @@ def export_label_studio_task(image_directory: str, output_filepath: str, include
            
 if __name__ == "__main__":
     export_label_studio_task("images", "label-studio-task.json", include_labels = False)
-
-
