@@ -5,10 +5,11 @@ import numpy as np
 from paddleocr import PaddleOCR
 from uuid import uuid4
 
-
+print("Initializing the OCR Parser ...", end = " ")
 OCR_ENGINE = PaddleOCR(lang = "en", show_log = False)
 HOST = "localhost"
 PORT = 9000
+print("Done")
 
 
 def get_region_id():
@@ -55,7 +56,9 @@ def get_directory_tree(parent_directory: str):
         - `str`: Generator that returns the file paths
         of the images.
     """
-    return (os.path.join(root, file) for root, _, files in os.walk(parent_directory) for file in files)
+    for root, _, files in os.walk(parent_directory):
+        for file in files:
+            yield os.path.join(root, file)
            
            
 def get_file_URL(filepath: str):
@@ -183,23 +186,28 @@ def export_label_studio_task(image_directory: str, output_filepath: str, include
     label_studio_tasks = list()
     _file_count = _total_files(image_directory)
     
-    for image_path in get_directory_tree(image_directory):
+    print(f"Scanning Files in {image_directory} ... ", end = " ")
+    print(f"Found {_file_count} Files")
+    
+    for count, image_path in enumerate(get_directory_tree(image_directory), 1):
+        print(f"[{count}/{_file_count}] Processing: {image_path}", end = " ")
         # check if the file is an image
         if not image_path.lower().endswith((".jpg", ".jpeg", ".png")):
+            print(f"Ignored")
             continue
         
         # read the image
         image = read_image(image_path)
         
         # get image dimensions
-        image_width, image_height, _ = np.shape(image)
+        image_height, image_width, _ = np.shape(image)
         
         # containers to store results
         annotation_result = list()
         output_json = dict()
         
         # parse image through OCR engine
-        for region_id, bottom_left, upper_right, text in OCR_Parser(image):
+        for idx, (region_id, bottom_left, upper_right, text) in enumerate(OCR_Parser(image), 1):
             
             # get bounding box co-ordinates
             xywh_bbox = convert_bounding_box_format(bottom_left, upper_right)
@@ -244,13 +252,16 @@ def export_label_studio_task(image_directory: str, output_filepath: str, include
                     "type": "labels"
                 }
                 annotation_result.extend([label])
-        
+          
+        print(f"Found {idx} boxes")
+              
         output_json['data'] = {"ocr": get_file_URL(image_path)}
         output_json['predictions'] = [{"result": annotation_result, "score": 0.9}]
         
         label_studio_tasks.append(output_json)
         
     with open(output_filepath, 'w') as f:
+        print(f"Exporting {output_filepath}")
         json.dump(label_studio_tasks, f, indent=4)
             
                
