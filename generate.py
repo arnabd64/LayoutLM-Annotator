@@ -4,11 +4,13 @@ import json
 import numpy as np
 from paddleocr import PaddleOCR
 from uuid import uuid4
+from server import PORT
 
 print("Initializing the OCR Parser ...", end = " ")
+
 OCR_ENGINE = PaddleOCR(lang = "en", show_log = False)
-HOST = "localhost"
-PORT = 9000
+ANNOTATION_NAME = "label-studio-task.json"
+
 print("Done")
 
 
@@ -73,7 +75,7 @@ def get_file_URL(filepath: str):
     --------
         - `str`: URL for the file
     """
-    return f"http://{HOST}:{PORT}/{filepath}".replace("\\", "/")
+    return f"http://localhost:{PORT}/{filepath}".replace("\\", "/")
   
   
 def read_image(filepath: str) -> np.ndarray:
@@ -268,4 +270,4 @@ def export_label_studio_task(image_directory: str, output_filepath: str, include
            
            
 if __name__ == "__main__":
-    export_label_studio_task("images", "label-studio-task.json", include_labels = False)
+    export_label_studio_task("images", ANNOTATION_NAME, include_labels = False)
